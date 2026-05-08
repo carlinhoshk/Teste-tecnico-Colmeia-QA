@@ -2,13 +2,16 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [main]
+    branches: [ci]
   pull_request:
-    branches: [main]
+    branches: [ci]
 
 jobs:
   cypress:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
 
     steps:
       - name: Checkout código
@@ -21,6 +24,14 @@ jobs:
         id: cypress
         run: npx cypress run
         continue-on-error: true
+
+      - name: Upload screenshots
+        if: steps.cypress.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-screenshots
+          path: cypress/screenshots
+          if-no-files-found: ignore
 
       - name: Criar issue se testes falharem
         if: steps.cypress.outcome == 'failure'
@@ -35,7 +46,6 @@ jobs:
               labels: 'qa,bug'
             });
 
-            // Evita criar issue duplicada se já existe uma aberta
             const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
             if (jaExiste) return;
 
@@ -43,7 +53,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### O que fazer\n1. Verifique o log da action: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n2. Identifique quais testes falharam\n3. Corrija o bug ou marque o teste como \`skip\` com justificativa\n\n### Labels\nEssa issue foi criada automaticamente pelo CI.`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Screenshots\nDisponíveis em: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nBaixe o artifact **cypress-screenshots** para visualizar as falhas.\n\n### O que fazer\n1. Acesse o link acima\n2. Baixe o artifact com os screenshots\n3. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
               labels: ['bug', 'qa']
             });
 
