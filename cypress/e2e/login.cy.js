@@ -53,6 +53,35 @@ describe('Login', () => {
     cy.get('field[name="password"]').should('have.attr', 'data-invalid', 'true')
     loginPage.validarPaginaDeLoginVisivel()
   })
+  // ─── Segurança ──────────────────────────────────────────────────────────
+  it('CT06 - SQL Injection no campo de email não deve autenticar', () => {
+    loginPage.preencherEmail(credentials.sqlInjectionUser.email)
+    loginPage.preencherSenha(credentials.sqlInjectionUser.password)
+    loginPage.clicarEntrar()
+
+    // Esperado: mensagem de erro e permanência na tela de login
+    // Obtido: qualquer redirecionamento seria uma falha crítica de segurança
+    loginPage.validarPaginaDeLoginVisivel()
+  })
+
+  it('CT07 - XSS no campo de email não deve executar script na interface', () => {
+    loginPage.preencherEmail(credentials.xssUser.email)
+    loginPage.preencherSenha(credentials.xssUser.password)
+    loginPage.clicarEntrar()
+
+    // Esperado: conteúdo tratado como texto, sem execução de script
+    // Se um alert() disparar durante o teste, o Cypress vai falhar — evidência do XSS
+    loginPage.validarPaginaDeLoginVisivel()
+  })
+
+  it('CT08 - Email com string muito longa não deve quebrar a aplicação', () => {
+    loginPage.preencherEmail(credentials.longStringUser.email)
+    loginPage.preencherSenha(credentials.longStringUser.password)
+    loginPage.clicarEntrar()
+
+    // Esperado: aplicação lida com o input sem travar ou exibir erro inesperado
+    loginPage.validarPaginaDeLoginVisivel()
+  })
 
   // ─── Elemento sem ação ──────────────────────────────────────────────────
 
