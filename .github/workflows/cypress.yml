@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout código
@@ -22,26 +22,67 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        # O 'tee' garante que o log apareça no console e seja salvo no arquivo ao mesmo tempo
-        run: npx cypress run | tee cypress.log
+        run: npx cypress run --reporter json --reporter-options "output=cypress/results.json"
         continue-on-error: true
 
-      - name: Criar issue se testes falharem
+      - name: Upload screenshots
+        if: steps.cypress.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-screenshots
+          path: cypress/screenshots
+          if-no-files-found: ignore
+
+      - name: Mover screenshots para pasta pública
+        if: steps.cypress.outcome == 'failure'
+        run: |
+          mkdir -p screenshots-ci
+          cp -r cypress/screenshots/* screenshots-ci/ || true
+
+      - name: Commit screenshots no repositório
+        if: steps.cypress.outcome == 'failure'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add screenshots-ci/
+          git commit -m "ci: screenshots da falha $(date +%Y-%m-%d)" || true
+          git push
+
+      - name: Criar issue com imagem inline
         if: steps.cypress.outcome == 'failure'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            let logContent = 'Log não encontrado.';
-            
-            if (fs.existsSync('cypress.log')) {
-              const fullLog = fs.readFileSync('cypress.log', 'utf8');
-              // Remove caracteres especiais de cores do terminal para o log ficar limpo
-              const cleanLog = fullLog.replace(/[\u001b\u009b][[()#;?]*(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007/g, '');
-              
-              // Pega apenas os últimos 2000 caracteres (onde geralmente estão os detalhes do erro)
-              logContent = cleanLog.length > 2000 ? '...' + cleanLog.slice(-2000) : cleanLog;
+
+            // Screenshots
+            const screenshotsDir = 'screenshots-ci';
+            let imageLinks = '';
+            if (fs.existsSync(screenshotsDir)) {
+              const files = fs.readdirSync(screenshotsDir, { recursive: true })
+                .filter(f => typeof f === 'string' && f.endsWith('.png'));
+              imageLinks = files.map(f => {
+                const encoded = f.split('/').map(encodeURIComponent).join('/');
+                const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${context.ref.replace('refs/heads/', '')}/screenshots-ci/${encoded}`;
+                return `![${f}](${url})`;
+              }).join('\n\n');
+            }
+
+            // Testes com falha via relatório JSON
+            let falhas = '';
+            try {
+              const resultado = JSON.parse(fs.readFileSync('cypress/results.json', 'utf8'));
+              const testes = resultado.results.flatMap(r =>
+                r.suites.flatMap(s =>
+                  s.tests
+                    .filter(t => t.state === 'failed')
+                    .map(t => `- ❌ **${s.title}** — ${t.title}\n  > ${t.err?.message?.split('\n')[0] || 'sem mensagem'}`)
+                )
+              );
+              falhas = testes.length > 0 ? testes.join('\n') : '';
+            } catch (e) {
+              falhas = '';
             }
 
             const { data: issues } = await github.rest.issues.listForRepo({
@@ -51,29 +92,17 @@ jobs:
               labels: 'qa,bug'
             });
 
-            const title = `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`;
             const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
-            
-            if (jaExiste) {
-              console.log('Issue já está aberta. Pulando criação.');
-              return;
-            }
+            if (jaExiste) return;
 
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: title,
-              body: `## ❌ Falha nos Testes E2E\n\n` +
-                    `**Branch:** \`${context.ref}\`\n` +
-                    `**Commit:** \`${context.sha}\`\n\n` +
-                    `### 📄 Resumo do Erro (Console):\n` +
-                    `\`\`\`text\n${logContent}\n\`\`\`\n\n` +
-                    `**Acesse o log completo em:** [GitHub Actions Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Testes com falha\n\n${falhas}\n\n### Screenshots\n\n${imageLinks}\n\n### O que fazer\n1. Veja os testes e imagens acima\n2. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
               labels: ['bug', 'qa']
             });
 
       - name: Falhar o job se testes falharam
         if: steps.cypress.outcome == 'failure'
-        run: |
-          echo "Os testes falharam. Forçando erro no Job para marcar como falho."
-          exit 1
+        run: exit 1
