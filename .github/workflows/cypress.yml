@@ -4,14 +4,14 @@ on:
   push:
     branches: [main, CI]
   pull_request:
-    branches: [main, CI]
+    branches: [main, ci]
 
 jobs:
   cypress:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout código
@@ -22,84 +22,51 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        run: npx cypress run --reporter json --reporter-options "output=cypress/results.json"
+        # Redireciona a saída para um arquivo para ser lida depois
+        run: npx cypress run | tee cypress-output.txt
         continue-on-error: true
 
-      - name: Upload screenshots
+      - name: Criar issue com logs de erro
         if: steps.cypress.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cypress-screenshots
-          path: cypress/screenshots
-          if-no-files-found: ignore
-
-      - name: Mover screenshots para pasta pública
-        if: steps.cypress.outcome == 'failure'
-        run: |
-          mkdir -p screenshots-ci
-          cp -r cypress/screenshots/* screenshots-ci/ || true
-
-      - name: Commit screenshots no repositório
-        if: steps.cypress.outcome == 'failure'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add screenshots-ci/
-          git commit -m "ci: screenshots da falha $(date +%Y-%m-%d)" || true
-          git push
-
-      - name: Criar issue com imagem inline
-        if: steps.cypress.outcome == 'failure'
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-
-            // Screenshots
-            const screenshotsDir = 'screenshots-ci';
-            let imageLinks = '';
-            if (fs.existsSync(screenshotsDir)) {
-              const files = fs.readdirSync(screenshotsDir, { recursive: true })
-                .filter(f => typeof f === 'string' && f.endsWith('.png'));
-              imageLinks = files.map(f => {
-                const encoded = f.split('/').map(encodeURIComponent).join('/');
-                const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${context.ref.replace('refs/heads/', '')}/screenshots-ci/${encoded}`;
-                return `![${f}](${url})`;
-              }).join('\n\n');
+            let logs = 'Não foi possível carregar os logs.';
+            
+            if (fs.existsSync('cypress-output.txt')) {
+              const fullLog = fs.readFileSync('cypress-output.txt', 'utf8');
+              // Tenta pegar a parte do log que contém as falhas (geralmente após o sumário)
+              // Ou simplesmente limita o tamanho para não estourar o limite da Issue (65k chars)
+              logs = fullLog.length > 60000 ? fullLog.substring(fullLog.length - 60000) : fullLog;
             }
 
-            // Testes com falha via relatório JSON
-            let falhas = '';
-            try {
-              const resultado = JSON.parse(fs.readFileSync('cypress/results.json', 'utf8'));
-              const testes = resultado.results.flatMap(r =>
-                r.suites.flatMap(s =>
-                  s.tests
-                    .filter(t => t.state === 'failed')
-                    .map(t => `- ❌ **${s.title}** — ${t.title}\n  > ${t.err?.message?.split('\n')[0] || 'sem mensagem'}`)
-                )
-              );
-              falhas = testes.length > 0 ? testes.join('\n') : '';
-            } catch (e) {
-              falhas = '';
-            }
-
+            const title = `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`;
+            
+            // Verifica se já existe uma issue aberta com esse título para evitar duplicatas
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'qa,bug'
+              labels: 'bug,qa'
             });
 
-            const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
-            if (jaExiste) return;
+            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) {
+              console.log('Já existe uma issue aberta para esta falha.');
+              return;
+            }
 
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Testes com falha\n\n${falhas}\n\n### Screenshots\n\n${imageLinks}\n\n### O que fazer\n1. Veja os testes e imagens acima\n2. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
+              title: title,
+              body: `## ❌ Falha detectada nos testes E2E\n\n` +
+                    `**Branch:** \`${context.ref}\`\n` +
+                    `**Workflow:** [Visualizar Execução](${context.payload.repository.html_url}/actions/runs/${context.runId})\n\n` +
+                    `### 📋 Logs de Erro\n` +
+                    `\`\`\`text\n${logs}\n\`\`\`\n\n` +
+                    `--- \n *Gerado automaticamente via GitHub Actions*`,
               labels: ['bug', 'qa']
             });
 
