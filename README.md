@@ -1,6 +1,7 @@
 # Teste Técnico QA — Colmeia ![alt text](.//assets/Cypress-Icon--Streamline-Svg-Logos.svg) ![alt text](./assets/Nodejs-Icon-Alt--Streamline-Svg-Logos.svg) ![alt text](./assets/Github-Actions--Streamline-Svg-Logos.svg)
 
-Teste técnico QA automatizado com Cypress 15 para a plataforma Colmeia. Foram implementados 17 testes E2E cobrindo autenticação (login), CRUD de bancos de dados e navegação no dashboard, utilizando Page Objects, custom commands e fixtures parametrizadas. A suite identificou 4 bugs (popup de login inválido com credenciais corretas, dropdown sem ação, refresh que limpa dados, arquivamento que remove permanentemente) e 3 funcionalidades não implementadas. A execução dos testes é feita via GitHub Actions, com criação automática de [issues](https://github.com/carlinhoshk/Teste-tecnico-Colmeia-QA/issues/14) no repositório quando há falhas.
+Teste técnico QA automatizado com Cypress 15 para a plataforma Colmeia. Foram implementados 17 testes E2E cobrindo autenticação (login), CRUD de bancos de dados e navegação no dashboard, utilizando Page Objects, custom commands e fixtures parametrizadas. A suite identificou 4 bugs (popup de login inválido com credenciais corretas, dropdown sem ação, refresh que limpa dados, arquivamento que remove permanentemente) e 3 funcionalidades não implementadas. A execução dos testes é feita via GitHub Actions, com criação automática de [issues](https://github.com/carlinhoshk/Teste-tecnico-Colmeia-QA/issues/14) no repositório quando há falhas e que vai para o board [kanban](https://github.com/users/carlinhoshk/projects/5)
+.
 
 ---
 
