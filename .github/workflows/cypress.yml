@@ -2,9 +2,9 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [CI]
+    branches: [main, CI]
   pull_request:
-    branches: [CI]
+    branches: [main, CI]
 
 jobs:
   cypress:
@@ -22,81 +22,28 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        run: npx cypress run 2>&1 | tee cypress-output.txt
+        # O 'tee' garante que o log apareça no console e seja salvo no arquivo ao mesmo tempo
+        run: npx cypress run | tee cypress.log
         continue-on-error: true
 
-      - name: Criar issue com detalhes do erro
+      - name: Criar issue se testes falharem
         if: steps.cypress.outcome == 'failure'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = require('path');
-
-            // ─── Extrai Esperado/Obtido do codigo fonte ────────────────
-            function extractDetails(testName) {
-              const e2eDir = 'cypress/e2e';
-              if (!fs.existsSync(e2eDir)) return {};
-              const files = fs.readdirSync(e2eDir).filter(f => f.endsWith('.cy.js'));
-              const ctMatch = testName.match(/(CT\d+)\s-\s(.+)/);
-              if (!ctMatch) return {};
-              const ctId = ctMatch[1];
-              const descSnippet = ctMatch[2].substring(0, 25);
-
-              for (const file of files) {
-                const content = fs.readFileSync(path.join(e2eDir, file), 'utf8');
-                const sourceLines = content.split('\n');
-                for (let i = 0; i < sourceLines.length; i++) {
-                  const line = sourceLines[i];
-                  if (line.includes(`'${ctId} -`) && line.includes(descSnippet)) {
-                    let expected = '', obtained = '', description = '';
-                    let jsdocLines = [];
-                    for (let j = i - 1; j >= Math.max(0, i - 20); j--) {
-                      const l = sourceLines[j].trim();
-                      if (l.startsWith('*') && !l.startsWith('/**') && !l.startsWith('*/') && !l.startsWith('//')) {
-                        jsdocLines.unshift(l.replace(/^\*\s?/, ''));
-                      } else if (l.includes("it('") || l.includes('it("'))) {
-                        break;
-                      }
-                    }
-                    if (jsdocLines.length) description = jsdocLines.join(' ');
-                    for (let j = i + 1; j < Math.min(sourceLines.length, i + 20); j++) {
-                      const l = sourceLines[j].trim();
-                      if (l.startsWith('// Esperado:')) expected = l.replace('// Esperado: ', '');
-                      else if (l.startsWith('// Obtido:')) obtained = l.replace('// Obtido: ', '');
-                      else if (!description && l.startsWith('// BUG-')) description = l.replace('// ', '');
-                    }
-                    return { expected, obtained, description, file };
-                  }
-                }
-              }
-              return {};
+            let logContent = 'Log não encontrado.';
+            
+            if (fs.existsSync('cypress.log')) {
+              const fullLog = fs.readFileSync('cypress.log', 'utf8');
+              // Remove caracteres especiais de cores do terminal para o log ficar limpo
+              const cleanLog = fullLog.replace(/[\u001b\u009b][[()#;?]*(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007/g, '');
+              
+              // Pega apenas os últimos 2000 caracteres (onde geralmente estão os detalhes do erro)
+              logContent = cleanLog.length > 2000 ? '...' + cleanLog.slice(-2000) : cleanLog;
             }
 
-            // ─── Parseia output do Cypress ─────────────────────────────
-            const failedTests = [];
-            const errorMessages = [];
-
-            if (fs.existsSync('cypress-output.txt')) {
-              const raw = fs.readFileSync('cypress-output.txt', 'utf8')
-                .replace(/\u001b\[.*?m/g, '');
-              const lines = raw.split('\n');
-
-              for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                if (/^\s{4}\d+\)\s/.test(line)) {
-                  failedTests.push(line.trim());
-                  continue;
-                }
-                if (/^\s{5,}(CypressError|AssertionError|Timed out)/.test(line)) {
-                  const msg = line.trim();
-                  if (!errorMessages.includes(msg)) errorMessages.push(msg);
-                }
-              }
-            }
-
-            // ─── Evita duplicata ───────────────────────────────────────
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -104,45 +51,29 @@ jobs:
               labels: 'qa,bug'
             });
 
-            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) return;
-
-            // ─── Monta body ────────────────────────────────────────────
-            const body = [
-              '## ❌ Testes E2E falharam\n',
-              `**Branch:** ${context.ref}`,
-              `**Commit:** ${context.sha}`,
-              '',
-              '---',
-            ];
-
-            for (let i = 0; i < failedTests.length; i++) {
-              const t = failedTests[i];
-              const err = errorMessages[i] || '';
-              const det = extractDetails(t);
-
-              body.push(`\n### ${t}`);
-              if (det.expected) body.push(`\n- **Esperado:** ${det.expected}`);
-              if (det.obtained) body.push(`\n- **Obtido:** ${det.obtained}`);
-              if (det.description) body.push(`\n- *${det.description}*`);
-              body.push('\n```\n' + err + '\n```');
+            const title = `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`;
+            const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
+            
+            if (jaExiste) {
+              console.log('Issue já está aberta. Pulando criação.');
+              return;
             }
-
-            body.push(
-              '',
-              '---',
-              `📎 Log completo: [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
-              '',
-              '_Issue gerada automaticamente pelo CI._'
-            );
 
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: body.join('\n'),
+              title: title,
+              body: `## ❌ Falha nos Testes E2E\n\n` +
+                    `**Branch:** \`${context.ref}\`\n` +
+                    `**Commit:** \`${context.sha}\`\n\n` +
+                    `### 📄 Resumo do Erro (Console):\n` +
+                    `\`\`\`text\n${logContent}\n\`\`\`\n\n` +
+                    `**Acesse o log completo em:** [GitHub Actions Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               labels: ['bug', 'qa']
             });
 
       - name: Falhar o job se testes falharam
         if: steps.cypress.outcome == 'failure'
-        run: exit 1
+        run: |
+          echo "Os testes falharam. Forçando erro no Job para marcar como falho."
+          exit 1
