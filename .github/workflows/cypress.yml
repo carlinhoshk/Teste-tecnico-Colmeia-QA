@@ -2,16 +2,16 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [CI]
+    branches: [main, CI]
   pull_request:
-    branches: [CI]
+    branches: [main, CI]
 
 jobs:
   cypress:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout código
@@ -33,62 +33,6 @@ jobs:
           path: cypress/screenshots
           if-no-files-found: ignore
 
-      - name: Mover screenshots para pasta pública
-        if: steps.cypress.outcome == 'failure'
-        run: |
-          mkdir -p screenshots-ci
-          cp -r cypress/screenshots/* screenshots-ci/ || true
-
-      - name: Commit screenshots no repositório
-        if: steps.cypress.outcome == 'failure'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add screenshots-ci/
-          git commit -m "ci: screenshots da falha $(date +%Y-%m-%d)" || true
-          git push
-
-      - name: Criar issue com imagem inline
-        if: steps.cypress.outcome == 'failure'
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { execSync } = require('child_process');
-            const fs = require('fs');
-            const path = require('path');
-
-            const screenshotsDir = 'screenshots-ci';
-            let imageLinks = '';
-
-            if (fs.existsSync(screenshotsDir)) {
-              const files = fs.readdirSync(screenshotsDir, { recursive: true })
-                .filter(f => f.endsWith('.png'));
-
-              imageLinks = files.map(f => {
-                const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${context.ref.replace('refs/heads/', '')}/screenshots-ci/${f}`;
-                return `![${f}](${url})`;
-              }).join('\n\n');
-            }
-
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'qa,bug'
-            });
-
-            const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
-            if (jaExiste) return;
-
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Screenshots\n\n${imageLinks}\n\n### O que fazer\n1. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
-              labels: ['bug', 'qa']
-            });    
-
       - name: Criar issue se testes falharem
         if: steps.cypress.outcome == 'failure'
         uses: actions/github-script@v6
@@ -109,7 +53,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Screenshots\nDisponíveis em: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nBaixe o artifact **cypress-screenshots** para visualizar as falhas.\n\n### O que fazer\n1. Acesse o link acima\n2. Baixe o artifact com os screenshots\n3. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Screenshots\nDisponíveis em: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nBaixe o artifact **cypress-screenshots** para visualizar as falhas.\n\n### O que fazer\n1. Acesse o link acima\n2. Baixe o artifact com os screenshots\n3. Corrija o bug ou marque o teste como \`skip\` com sua justificativa`,
               labels: ['bug', 'qa']
             });
 
