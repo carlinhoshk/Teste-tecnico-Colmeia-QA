@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 name: Cypress E2E Tests
 
 on:
@@ -77,3 +78,68 @@ jobs:
         run: |
           echo "Os testes falharam. Forçando erro no Job para marcar como falho."
           exit 1
+=======
+name: Cypress CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run Cypress tests
+        id: cypress
+        continue-on-error: true
+        run: |
+          npx cypress run 2>&1 | tee cypress-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifacts on failure
+        if: steps.cypress.outputs.exit_code != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-failure-${{ github.run_id }}
+          path: |
+            cypress/screenshots/
+            cypress/videos/
+            cypress-output.txt
+
+      - name: Create issue on failure
+        if: steps.cypress.outputs.exit_code != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Cypress Test Failure Report"
+            echo ""
+            echo "**Branch:** \`${{ github.ref_name }}\`"
+            echo "**Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})"
+            echo "**Author:** ${{ github.actor }}"
+            echo ""
+            echo '```'
+            grep -E '✗|×|AssertionError|Error' cypress-output.txt 2>/dev/null || echo "(check artifacts)"
+            echo '```'
+            echo ""
+            echo "**Artifacts:** [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } > /tmp/issue-body.md
+
+          gh issue create \
+            --title "[CI] Test failure - ${{ github.ref_name }} ($(date +'%Y-%m-%d'))" \
+            --label "bug" \
+            --body "$(cat /tmp/issue-body.md)"
+>>>>>>> b0523a0 (Feat: Add Cypress CI workflow for automated testing and failure reporting)
