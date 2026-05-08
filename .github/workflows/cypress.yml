@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, CI]
   pull_request:
-    branches: [main, ci]
+    branches: [main, CI]
 
 jobs:
   cypress:
@@ -22,38 +22,40 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        # Redireciona a saída para um arquivo para ser lida depois
-        run: npx cypress run | tee cypress-output.txt
+        # O 'tee' garante que o log apareça no console e seja salvo no arquivo ao mesmo tempo
+        run: npx cypress run | tee cypress.log
         continue-on-error: true
 
-      - name: Criar issue com logs de erro
+      - name: Criar issue se testes falharem
         if: steps.cypress.outcome == 'failure'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            let logs = 'Não foi possível carregar os logs.';
+            let logContent = 'Log não encontrado.';
             
-            if (fs.existsSync('cypress-output.txt')) {
-              const fullLog = fs.readFileSync('cypress-output.txt', 'utf8');
-              // Tenta pegar a parte do log que contém as falhas (geralmente após o sumário)
-              // Ou simplesmente limita o tamanho para não estourar o limite da Issue (65k chars)
-              logs = fullLog.length > 60000 ? fullLog.substring(fullLog.length - 60000) : fullLog;
+            if (fs.existsSync('cypress.log')) {
+              const fullLog = fs.readFileSync('cypress.log', 'utf8');
+              // Remove caracteres especiais de cores do terminal para o log ficar limpo
+              const cleanLog = fullLog.replace(/[\u001b\u009b][[()#;?]*(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007/g, '');
+              
+              // Pega apenas os últimos 2000 caracteres (onde geralmente estão os detalhes do erro)
+              logContent = cleanLog.length > 2000 ? '...' + cleanLog.slice(-2000) : cleanLog;
             }
 
-            const title = `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`;
-            
-            // Verifica se já existe uma issue aberta com esse título para evitar duplicatas
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'bug,qa'
+              labels: 'qa,bug'
             });
 
-            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) {
-              console.log('Já existe uma issue aberta para esta falha.');
+            const title = `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`;
+            const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
+            
+            if (jaExiste) {
+              console.log('Issue já está aberta. Pulando criação.');
               return;
             }
 
@@ -61,15 +63,17 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: title,
-              body: `## ❌ Falha detectada nos testes E2E\n\n` +
+              body: `## ❌ Falha nos Testes E2E\n\n` +
                     `**Branch:** \`${context.ref}\`\n` +
-                    `**Workflow:** [Visualizar Execução](${context.payload.repository.html_url}/actions/runs/${context.runId})\n\n` +
-                    `### 📋 Logs de Erro\n` +
-                    `\`\`\`text\n${logs}\n\`\`\`\n\n` +
-                    `--- \n *Gerado automaticamente via GitHub Actions*`,
+                    `**Commit:** \`${context.sha}\`\n\n` +
+                    `### 📄 Resumo do Erro (Console):\n` +
+                    `\`\`\`text\n${logContent}\n\`\`\`\n\n` +
+                    `**Acesse o log completo em:** [GitHub Actions Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               labels: ['bug', 'qa']
             });
 
       - name: Falhar o job se testes falharam
         if: steps.cypress.outcome == 'failure'
-        run: exit 1
+        run: |
+          echo "Os testes falharam. Forçando erro no Job para marcar como falho."
+          exit 1
