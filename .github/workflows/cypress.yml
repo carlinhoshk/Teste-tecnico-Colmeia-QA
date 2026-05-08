@@ -2,45 +2,28 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [main, CI]
+    branches: [main, ci]
   pull_request:
-    branches: [main, CI]
+    branches: [main, ci]
 
 jobs:
   cypress:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
       - name: Instalar dependências
-        run: npm ci
+        run: npm install
 
       - name: Rodar testes Cypress
         id: cypress
+        run: npx cypress run --reporter json > cypress-results.json 2>/dev/null
         continue-on-error: true
-        run: |
-          npx cypress run 2>&1 | tee cypress.log
-
-      - name: Upload screenshots e vídeos
-        if: steps.cypress.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cypress-failure-${{ github.run_id }}
-          path: |
-            cypress/screenshots/
-            cypress/videos/
-            cypress.log
 
       - name: Criar issue com detalhes do erro
         if: steps.cypress.outcome == 'failure'
@@ -50,44 +33,42 @@ jobs:
           script: |
             const fs = require('fs');
 
-            // Lê e limpa o log do Cypress (remove caracteres ANSI de cor)
-            const raw = fs.existsSync('cypress.log')
-              ? fs.readFileSync('cypress.log', 'utf8').replace(/\u001b\[.*?m/g, '')
-              : '';
-            const lines = raw.split('\n');
-
-            // Extrai os testes que falharam e suas mensagens de erro
             const failedTests = [];
             const errorMessages = [];
-            let capturing = false;
 
-            for (const line of lines) {
-              if (line.match(/^\s+[✗×]/)) {
-                failedTests.push(line.trim());
-                capturing = true;
-              } else if (capturing) {
-                if (line.trim() && line.startsWith('      ')) {
-                  errorMessages.push(line.trim());
-                } else {
-                  capturing = false;
+            if (fs.existsSync('cypress-results.json')) {
+              const raw = fs.readFileSync('cypress-results.json', 'utf8')
+                .replace(/\u001b\[.*?m/g, '');
+
+              // Cada spec produz um JSON object por linha
+              const lines = raw.split('\n').filter(l => l.trim());
+
+              for (const line of lines) {
+                try {
+                  const spec = JSON.parse(line);
+                  const tests = spec.tests || [];
+
+                  for (const test of tests) {
+                    if (test.state === 'failed') {
+                      const title = Array.isArray(test.title)
+                        ? test.title.join(' > ')
+                        : test.title;
+
+                      const errMsg = test.displayError
+                        || test.err?.message
+                        || 'Sem mensagem de erro';
+
+                      failedTests.push(`- ❌ **${title}**`);
+                      errorMessages.push(errMsg.split('\n')[0]);
+                    }
+                  }
+                } catch (_) {
+                  // Linha não-JSON (ex: Cypress pode incluir warnings)
                 }
               }
             }
 
-            // Extrai o resumo (passing / failing / duration)
-            const summary = lines
-              .filter(l => l.match(/(Tests|Passing|Failing|Pending|Duration|Screenshots):/))
-              .map(l => l.trim());
-
-            // Nome da branch (funciona tanto em push quanto em PR)
-            const branch = context.payload.pull_request
-              ? context.payload.pull_request.head.ref
-              : context.ref.replace('refs/heads/', '');
-
-            const date = new Date().toISOString().split('T')[0];
-            const title = `[CI] Falha nos testes E2E — ${date} (${branch})`;
-
-            // Evita abrir issue duplicada no mesmo dia
+            // Evita abrir issue duplicada
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -95,46 +76,41 @@ jobs:
               labels: 'bug,qa'
             });
 
-            if (issues.some(i => i.title.includes(date))) {
-              console.log('Issue já existe para hoje. Pulando criação.');
+            const date = new Date().toISOString().split('T')[0];
+            const title = `Falha nos testes E2E — ${date}`;
+
+            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) {
+              console.log('Issue já existe. Pulando criação.');
               return;
             }
 
-            // Monta o body da issue
+            // Monta body
             const body = [
-              '## ❌ Falha nos Testes Cypress\n',
-              `**Branch:** \`${branch}\``,
-              `**Commit:** \`${context.sha}\``,
-              `**Data:** ${new Date().toLocaleString('pt-BR')}`,
+              '## ❌ Testes E2E falharam\n',
+              `**Branch:** ${context.ref}`,
+              `**Commit:** ${context.sha}`,
               '',
               '---',
             ];
 
             if (failedTests.length) {
-              body.push(`\n### 🧪 Testes com falha (${failedTests.length})`);
-              body.push('```');
+              body.push('\n### Testes com falha');
               body.push(...failedTests);
-              body.push('```');
+            } else {
+              body.push('\n> Não foi possível extrair detalhes dos testes.');
             }
 
             if (errorMessages.length) {
-              body.push('\n### ⚠️ Mensagens de erro');
+              body.push('\n### Mensagens de erro');
               body.push('```');
-              body.push(...errorMessages.slice(0, 30));
-              body.push('```');
-            }
-
-            if (summary.length) {
-              body.push('\n### 📊 Resumo');
-              body.push('```');
-              body.push(...summary);
+              body.push(...errorMessages.slice(0, 20));
               body.push('```');
             }
 
             body.push(
               '',
               '---',
-              `📎 Screenshots, vídeos e log completo: [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              `📎 Log completo: [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
               '_Issue gerada automaticamente pelo CI._'
             );
@@ -149,6 +125,4 @@ jobs:
 
       - name: Falhar o job se testes falharam
         if: steps.cypress.outcome == 'failure'
-        run: |
-          echo "Os testes falharam. Forçando erro no Job para marcar como falho."
-          exit 1
+        run: exit 1
