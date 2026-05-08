@@ -22,7 +22,7 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        run: npx cypress run
+        run: npx cypress run --reporter json --reporter-options "output=cypress/results.json"
         continue-on-error: true
 
       - name: Upload screenshots
@@ -56,18 +56,33 @@ jobs:
           script: |
             const fs = require('fs');
 
+            // Screenshots
             const screenshotsDir = 'screenshots-ci';
             let imageLinks = '';
-
             if (fs.existsSync(screenshotsDir)) {
               const files = fs.readdirSync(screenshotsDir, { recursive: true })
                 .filter(f => typeof f === 'string' && f.endsWith('.png'));
-
               imageLinks = files.map(f => {
                 const encoded = f.split('/').map(encodeURIComponent).join('/');
                 const url = `https://raw.githubusercontent.com/${context.repo.owner}/${context.repo.repo}/${context.ref.replace('refs/heads/', '')}/screenshots-ci/${encoded}`;
                 return `![${f}](${url})`;
               }).join('\n\n');
+            }
+
+            // Testes com falha via relatório JSON
+            let falhas = '';
+            try {
+              const resultado = JSON.parse(fs.readFileSync('cypress/results.json', 'utf8'));
+              const testes = resultado.results.flatMap(r =>
+                r.suites.flatMap(s =>
+                  s.tests
+                    .filter(t => t.state === 'failed')
+                    .map(t => `- ❌ **${s.title}** — ${t.title}\n  > ${t.err?.message?.split('\n')[0] || 'sem mensagem'}`)
+                )
+              );
+              falhas = testes.length > 0 ? testes.join('\n') : '';
+            } catch (e) {
+              falhas = '';
             }
 
             const { data: issues } = await github.rest.issues.listForRepo({
@@ -84,7 +99,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Testes com falha\n\n${imageLinks}\n\n### O que fazer\n1. Veja as imagens acima\n2. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Testes com falha\n\n${falhas}\n\n### Screenshots\n\n${imageLinks}\n\n### O que fazer\n1. Veja os testes e imagens acima\n2. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
               labels: ['bug', 'qa']
             });
 
