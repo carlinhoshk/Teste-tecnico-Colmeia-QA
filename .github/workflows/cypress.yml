@@ -33,7 +33,7 @@ jobs:
           path: cypress/screenshots
           if-no-files-found: ignore
 
-            - name: Mover screenshots para pasta pública
+      - name: Mover screenshots para pasta pública
         if: steps.cypress.outcome == 'failure'
         run: |
           mkdir -p screenshots-ci
