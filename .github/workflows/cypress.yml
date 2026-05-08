@@ -22,7 +22,7 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        run: npx cypress run
+        run: npx cypress run --reporter json --reporter-options "output=cypress/results.json"
         continue-on-error: true
 
       - name: Upload screenshots
@@ -39,6 +39,25 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const fs = require('fs');
+
+            let falhas = '';
+            try {
+              const resultado = JSON.parse(fs.readFileSync('cypress/results.json', 'utf8'));
+              const testes = resultado.results.flatMap(r =>
+                r.suites.flatMap(s =>
+                  s.tests
+                    .filter(t => t.state === 'failed')
+                    .map(t => `- ❌ **${s.title}** — ${t.title}\n  > ${t.err?.message?.split('\n')[0] || 'sem mensagem'}`)
+                )
+              );
+              falhas = testes.length > 0
+                ? `### Testes com falha\n\n${testes.join('\n')}`
+                : '';
+            } catch (e) {
+              falhas = '> Não foi possível ler o relatório de testes.';
+            }
+
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -53,7 +72,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
-              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### Screenshots\nDisponíveis em: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nBaixe o artifact **cypress-screenshots** para visualizar as falhas.\n\n### O que fazer\n1. Acesse o link acima\n2. Baixe o artifact com os screenshots\n3. Corrija o bug ou marque o teste como \`skip\` com sua justificativa`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n${falhas}\n\n### Screenshots\nDisponíveis em: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\nBaixe o artifact **cypress-screenshots** para visualizar as falhas.\n\n### O que fazer\n1. Acesse o link acima\n2. Baixe o artifact com os screenshots\n3. Corrija o bug ou marque o teste como \`skip\` com justificativa`,
               labels: ['bug', 'qa']
             });
 
