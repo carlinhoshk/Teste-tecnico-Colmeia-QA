@@ -1,0 +1,52 @@
+name: Cypress E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Rodar testes Cypress
+        id: cypress
+        run: npx cypress run
+        continue-on-error: true
+
+      - name: Criar issue se testes falharem
+        if: steps.cypress.outcome == 'failure'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'qa,bug'
+            });
+
+            // Evita criar issue duplicada se já existe uma aberta
+            const jaExiste = issues.some(i => i.title.includes('Falha nos testes E2E'));
+            if (jaExiste) return;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
+              body: `## Testes E2E falharam\n\n**Branch:** ${context.ref}\n**Commit:** ${context.sha}\n\n### O que fazer\n1. Verifique o log da action: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n2. Identifique quais testes falharam\n3. Corrija o bug ou marque o teste como \`skip\` com justificativa\n\n### Labels\nEssa issue foi criada automaticamente pelo CI.`,
+              labels: ['bug', 'qa']
+            });
+
+      - name: Falhar o job se testes falharam
+        if: steps.cypress.outcome == 'failure'
+        run: exit 1
