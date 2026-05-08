@@ -35,7 +35,7 @@ class LoginPage {
     this.btnContinuar.click()
   }
 
-  // ─── Asserções ────────────────────────────────────────────────────────────
+  // ─── Asserções 
 
   /**
    * Valida a mensagem de alerta exibida mesmo com credenciais válidas (BUG-001).
