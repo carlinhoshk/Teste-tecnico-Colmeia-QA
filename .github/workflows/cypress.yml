@@ -2,16 +2,16 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [main, ci]
+    branches: [CI]
   pull_request:
-    branches: [main, ci]
+    branches: [CI]
 
 jobs:
   cypress:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout código
@@ -22,18 +22,8 @@ jobs:
 
       - name: Rodar testes Cypress
         id: cypress
-        run: npx cypress run --reporter json > cypress-results.json 2>&1
+        run: npx cypress run 2>&1 | tee cypress-output.txt
         continue-on-error: true
-
-      - name: Debug - exibir resultado bruto
-        if: steps.cypress.outcome == 'failure'
-        run: |
-          echo "=== INÍCIO DO JSON ==="
-          head -c 5000 cypress-results.json
-          echo ""
-          echo "=== FIM DO JSON ==="
-          echo "Tamanho do arquivo: $(wc -c < cypress-results.json) bytes"
-          echo "Linhas no arquivo: $(wc -l < cypress-results.json)"
 
       - name: Criar issue com detalhes do erro
         if: steps.cypress.outcome == 'failure'
@@ -42,115 +32,81 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            const path = require('path');
 
-            // ─── Extrair objetos JSON completos do arquivo ───────────────
-            // Cypress com --reporter json pode gerar um JSON por spec,
-            // cada um formatado em múltiplas linhas (pretty-print).
-            function extrairJSONs(texto) {
-              const objetos = [];
-              let depth = 0;
-              let inicio = -1;
-              for (let i = 0; i < texto.length; i++) {
-                const ch = texto[i];
-                if (ch === '{') {
-                  if (depth === 0) inicio = i;
-                  depth++;
-                } else if (ch === '}') {
-                  depth--;
-                  if (depth === 0 && inicio !== -1) {
-                    try {
-                      objetos.push(JSON.parse(texto.slice(inicio, i + 1)));
-                    } catch (_) {}
-                    inicio = -1;
-                  }
-                }
-              }
-              return objetos;
-            }
+            // ─── Extrai Esperado/Obtido do codigo fonte ────────────────
+            function extractDetails(testName) {
+              const e2eDir = 'cypress/e2e';
+              if (!fs.existsSync(e2eDir)) return {};
+              const files = fs.readdirSync(e2eDir).filter(f => f.endsWith('.cy.js'));
+              const ctMatch = testName.match(/(CT\d+)\s-\s(.+)/);
+              if (!ctMatch) return {};
+              const ctId = ctMatch[1];
+              const descSnippet = ctMatch[2].substring(0, 25);
 
-            // ─── Extrair testes de um objeto JSON (tenta vários caminhos) ──
-            function extrairTestes(obj, destino) {
-              // Path 1: obj.tests (array direto de testes)
-              if (Array.isArray(obj.tests)) {
-                for (const t of obj.tests) {
-                  if (t.state === 'failed') destino.push(t);
-                }
-              }
-              // Path 2: obj.failures (array de testes que falharam)
-              if (Array.isArray(obj.failures)) {
-                for (const t of obj.failures) destino.push(t);
-              }
-              // Path 3: obj.results[].suites[].tests[]
-              if (Array.isArray(obj.results)) {
-                for (const r of obj.results) {
-                  if (Array.isArray(r.tests)) {
-                    for (const t of r.tests) {
-                      if (t.state === 'failed') destino.push(t);
-                    }
-                  }
-                  if (Array.isArray(r.suites)) {
-                    const percorrer = (suites) => {
-                      for (const s of suites) {
-                        if (Array.isArray(s.tests)) {
-                          for (const t of s.tests) {
-                            if (t.state === 'failed') destino.push(t);
-                          }
-                        }
-                        if (Array.isArray(s.suites)) percorrer(s.suites);
+              for (const file of files) {
+                const content = fs.readFileSync(path.join(e2eDir, file), 'utf8');
+                const sourceLines = content.split('\n');
+                for (let i = 0; i < sourceLines.length; i++) {
+                  const line = sourceLines[i];
+                  if (line.includes(`'${ctId} -`) && line.includes(descSnippet)) {
+                    let expected = '', obtained = '', description = '';
+                    let jsdocLines = [];
+                    for (let j = i - 1; j >= Math.max(0, i - 20); j--) {
+                      const l = sourceLines[j].trim();
+                      if (l.startsWith('*') && !l.startsWith('/**') && !l.startsWith('*/') && !l.startsWith('//')) {
+                        jsdocLines.unshift(l.replace(/^\*\s?/, ''));
+                      } else if (l.includes("it('") || l.includes('it("'))) {
+                        break;
                       }
-                    };
-                    percorrer(r.suites);
+                    }
+                    if (jsdocLines.length) description = jsdocLines.join(' ');
+                    for (let j = i + 1; j < Math.min(sourceLines.length, i + 20); j++) {
+                      const l = sourceLines[j].trim();
+                      if (l.startsWith('// Esperado:')) expected = l.replace('// Esperado: ', '');
+                      else if (l.startsWith('// Obtido:')) obtained = l.replace('// Obtido: ', '');
+                      else if (!description && l.startsWith('// BUG-')) description = l.replace('// ', '');
+                    }
+                    return { expected, obtained, description, file };
                   }
                 }
               }
+              return {};
             }
 
-            // ─── Tentar parsear ──────────────────────────────────────────
-            const raw = fs.existsSync('cypress-results.json')
-              ? fs.readFileSync('cypress-results.json', 'utf8').replace(/\u001b\[.*?m/g, '')
-              : '';
-
+            // ─── Parseia output do Cypress ─────────────────────────────
             const failedTests = [];
             const errorMessages = [];
 
-            // Tenta 1: arquivo inteiro é um JSON único
-            try {
-              const unico = JSON.parse(raw);
-              extrairTestes(unico, failedTests);
-            } catch (_) {
-              // Tenta 2: múltiplos JSON no arquivo
-              const objetos = extrairJSONs(raw);
-              for (const obj of objetos) {
-                extrairTestes(obj, failedTests);
+            if (fs.existsSync('cypress-output.txt')) {
+              const raw = fs.readFileSync('cypress-output.txt', 'utf8')
+                .replace(/\u001b\[.*?m/g, '');
+              const lines = raw.split('\n');
+
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (/^\s{4}\d+\)\s/.test(line)) {
+                  failedTests.push(line.trim());
+                  continue;
+                }
+                if (/^\s{5,}(CypressError|AssertionError|Timed out)/.test(line)) {
+                  const msg = line.trim();
+                  if (!errorMessages.includes(msg)) errorMessages.push(msg);
+                }
               }
             }
 
-            // Monta as strings de saída
-            for (const t of failedTests) {
-              const nome = Array.isArray(t.title)
-                ? t.title.join(' > ')
-                : (t.fullTitle || t.title || 'Teste desconhecido');
-              const erro = t.displayError || t.err?.message || '';
-              if (erro) errorMessages.push(erro.split('\n')[0]);
-            }
-
-            // ─── Verificar duplicatas ────────────────────────────────────
+            // ─── Evita duplicata ───────────────────────────────────────
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'bug,qa'
+              labels: 'qa,bug'
             });
 
-            const date = new Date().toISOString().split('T')[0];
-            const title = `Falha nos testes E2E — ${date}`;
+            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) return;
 
-            if (issues.some(i => i.title.includes('Falha nos testes E2E'))) {
-              console.log('Issue já existe. Pulando criação.');
-              return;
-            }
-
-            // ─── Montar body ─────────────────────────────────────────────
+            // ─── Monta body ────────────────────────────────────────────
             const body = [
               '## ❌ Testes E2E falharam\n',
               `**Branch:** ${context.ref}`,
@@ -159,31 +115,22 @@ jobs:
               '---',
             ];
 
-            if (failedTests.length > 0) {
-              body.push(`\n### Testes com falha (${failedTests.length})`);
-              for (const t of failedTests) {
-                const nome = Array.isArray(t.title)
-                  ? t.title.join(' > ')
-                  : (t.fullTitle || t.title || 'Teste desconhecido');
-                body.push(`- ❌ **${nome}**`);
-              }
-            }
+            for (let i = 0; i < failedTests.length; i++) {
+              const t = failedTests[i];
+              const err = errorMessages[i] || '';
+              const det = extractDetails(t);
 
-            if (errorMessages.length > 0) {
-              body.push('\n### Mensagens de erro');
-              body.push('```');
-              body.push(...errorMessages.slice(0, 20));
-              body.push('```');
-            }
-
-            if (failedTests.length === 0 && errorMessages.length === 0) {
-              body.push('\n> Não foi possível extrair detalhes automaticamente.');
+              body.push(`\n### ${t}`);
+              if (det.expected) body.push(`\n- **Esperado:** ${det.expected}`);
+              if (det.obtained) body.push(`\n- **Obtido:** ${det.obtained}`);
+              if (det.description) body.push(`\n- *${det.description}*`);
+              body.push('\n```\n' + err + '\n```');
             }
 
             body.push(
               '',
               '---',
-              `📎 Verifique o log completo: [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              `📎 Log completo: [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
               '_Issue gerada automaticamente pelo CI._'
             );
@@ -191,7 +138,7 @@ jobs:
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title,
+              title: `Falha nos testes E2E — ${new Date().toISOString().split('T')[0]}`,
               body: body.join('\n'),
               labels: ['bug', 'qa']
             });
