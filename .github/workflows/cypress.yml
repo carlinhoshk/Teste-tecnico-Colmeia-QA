@@ -2,9 +2,9 @@ name: Cypress E2E Tests
 
 on:
   push:
-    branches: [ci]
+    branches: [CI]
   pull_request:
-    branches: [ci]
+    branches: [CI]
 
 jobs:
   cypress:
