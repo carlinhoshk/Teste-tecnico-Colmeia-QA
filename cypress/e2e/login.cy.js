@@ -7,7 +7,7 @@ describe('Login', () => {
     loginPage.acessarPagina()
   })
 
-  //  Fluxo feliz
+  //  Happy path
 
   /**
    * BUG-001: Login com credenciais válidas exibe popup de erro
@@ -27,7 +27,7 @@ describe('Login', () => {
     loginPage.validarRedirecionamentoParaDashboard()
   })
 
-  // Fluxo negativo
+  // Bad path
 
   it('CT02 - Login com credenciais inválidas deve exibir mensagem de erro e permanecer na tela de login', () => {
     loginPage.preencherEmail(credentials.invalid.email)
@@ -89,12 +89,13 @@ describe('Login', () => {
    * Elemento "Esqueceu sua senha?" existe na tela mas não possui
    * href nem handler associado — funcionalidade não implementada.
    */
-  it('CT05 - Esqueceu sua senha? não deve executar nenhuma ação ao ser clicado', () => {
-    cy.contains('Esqueceu sua senha?').click()
+  it('CT05 - Esqueceu sua senha? deve redirecionar para outra página', () => {
+    cy.location('pathname').then((pathAntes) => {
+      cy.contains('Esqueceu sua senha?').click()
 
-    // Esperado: redirecionamento ou modal de recuperação de senha
-    // Obtido: nenhuma ação — usuário permanece na tela de login
-    loginPage.validarPaginaDeLoginVisivel()
+      // Esperado: qualquer mudança de página — modal, redirect, nova rota
+      // Obtido: nenhuma ação, usuário permanece na mesma URL
+      cy.location('pathname').should('not.eq', pathAntes)
+    })
   })
-
 })
